@@ -19,7 +19,8 @@ $EditionKey = $Edition.ToLowerInvariant()
 $IsGovernmentEdition = $Edition -eq 'Government'
 $OutputRoot = Join-Path $WorkRoot $(if ($IsGovernmentEdition) { 'output-government' } else { 'output' })
 $LogRoot = Join-Path $WorkRoot 'logs'
-$IssPath = Join-Path $WorkRoot 'MedClaw.iss'
+$IssTemplatePath = Join-Path $WorkRoot 'MedClaw.iss'
+$BuildIssPath = Join-Path $WorkRoot ('.MedClaw.build-{0}.iss' -f $PID)
 $NodeRunner = Join-Path $WorkRoot 'node-runner\node.exe'
 $NodeRunnerPnpm = Join-Path $WorkRoot 'node-runner\pnpm.cmd'
 $NodeRunnerPnpmModule = Join-Path $WorkRoot 'node-runner\node_modules\pnpm\bin\pnpm.mjs'
@@ -215,15 +216,18 @@ function Get-NextVersion {
 }
 
 function Set-InstallerVersion {
-    param([Parameter(Mandatory)] [string]$Version)
-    $text = [IO.File]::ReadAllText($IssPath)
+    param(
+        [Parameter(Mandatory)] [string]$Path,
+        [Parameter(Mandatory)] [string]$Version
+    )
+    $text = [IO.File]::ReadAllText($Path)
     $versionPattern = [regex]'#define MyAppVersion "\d+\.\d+\.\d+[.-]\d+"'
     if (-not $versionPattern.IsMatch($text)) {
-        throw "Failed to find MyAppVersion in $IssPath"
+        throw "Failed to find MyAppVersion in $Path"
     }
     $updated = $versionPattern.Replace($text, "#define MyAppVersion `"$Version`"", 1)
     if ($updated -ne $text) {
-        [IO.File]::WriteAllText($IssPath, $updated, [Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText($Path, $updated, [Text.UTF8Encoding]::new($false))
     }
 }
 
@@ -263,7 +267,7 @@ Start-Transcript -Path $logPath -Force | Out-Null
 
 try {
     New-Item -ItemType Directory -Path (Split-Path -Parent $PackageStatePath) -Force | Out-Null
-    Assert-Path $IssPath 'Inno Setup project'
+    Assert-Path $IssTemplatePath 'Inno Setup project'
     Assert-Path $Iscc 'Inno Setup compiler'
     Assert-Path $NodeRunner 'Bundled Node runner'
     Assert-Path $NodeRunnerPnpm 'Bundled pnpm launcher'
@@ -486,7 +490,11 @@ try {
     Write-Host "Packaged client/viewer-web/dist ($viewerFileCount files)." -ForegroundColor Green
 
     $version = Get-NextVersion -ClientVersion $clientVersion -PreviousState $previousState
-    Set-InstallerVersion $version
+    # Never edit the tracked MedClaw.iss. Build from a per-process temporary copy so
+    # the generated version is confined to this packaging run and concurrent runs do
+    # not share a mutable installer source file.
+    Copy-Item -LiteralPath $IssTemplatePath -Destination $BuildIssPath -Force
+    Set-InstallerVersion -Path $BuildIssPath -Version $version
     $compressionMode = if ($Fast) { 'lzma2/fast, non-solid' } else { 'lzma2/ultra64, solid' }
     Write-Host "`nInstaller version: $version" -ForegroundColor Green
     Write-Host "Compression: $compressionMode" -ForegroundColor Green
@@ -497,7 +505,7 @@ try {
     $installerPrefix = if ($IsGovernmentEdition) { 'AetherStudy-Government-Setup' } else { 'AetherStudy-Setup' }
     $isccArguments += "/DClientPayloadDir=$ClientPayloadRelative"
     $isccArguments += "/DInstallerNamePrefix=$installerPrefix"
-    $isccArguments += $IssPath
+    $isccArguments += $BuildIssPath
     Invoke-Checked -FilePath $Iscc -Arguments $isccArguments -WorkingDirectory $RepoRoot
 
     $installer = Join-Path $OutputRoot "$installerPrefix-$version-x64.exe"
@@ -535,5 +543,6 @@ catch {
     exit 1
 }
 finally {
+    Remove-Item -LiteralPath $BuildIssPath -Force -ErrorAction SilentlyContinue
     Stop-Transcript | Out-Null
 }
