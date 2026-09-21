@@ -1,0 +1,25 @@
+# Package outputs and generated installer payloads
+/output/
+/output-*/
+/outputs/
+/package/
+
+# Temporary client copies and build products
+/client-source-current/
+/client-source-government/
+/client-build-current/
+/client-build-government/
+
+# Local package caches and logs
+/cache/
+/logs/
+/node-runner/node_modules/
+
+# Common local/editor/build leftovers
+*.log
+*.tmp
+*.temp
+*.bak
+*.user
+*.suo
+.vs/

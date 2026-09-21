@@ -1,0 +1,20 @@
+{
+  "modelFromClient": true,
+  "embedding": {
+    "baseUrl": "http://111.6.178.34:11400/v1",
+    "apiKey": "sk-cH5evFfxT1CVFRlQQdjhuzUsLddersWXCOYqji366ahSzYGR",
+    "model": "bge-m3",
+    "dimensions": 1024
+  },
+  "tavilyApiKey": "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",
+  "ncbiApiKey": "",
+  "fontSource": {
+    "仿宋_GB2312": "",
+    "方正小标宋_GBK": "",
+    "黑体": "",
+    "楷体_GB2312": ""
+  },
+  "libreofficeMirror": "",
+  "watchdog": true,
+  "overwriteIdentity": true
+}
