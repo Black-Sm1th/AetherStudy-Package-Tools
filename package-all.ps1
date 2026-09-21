@@ -7,8 +7,7 @@ param(
     [switch]$Fast,
     [switch]$Clean,
     [switch]$SkipBackend,
-    [switch]$SkipClient,
-    [string]$KbEnvSource = ''
+    [switch]$SkipClient
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,7 +33,6 @@ $ClientRuntimeDllRoot = Join-Path $WorkRoot 'client-runtime'
 $ClientRuntimeDlls = @('libcrypto-1_1-x64.dll', 'libssl-1_1-x64.dll')
 $DeployConfig = Join-Path $WorkRoot 'medclaw.deploy.json'
 $BackendPackage = Join-Path $BackendRoot 'dist\prod\medbuddy'
-$KbEnvDestination = Join-Path $BackendPackage 'python-envs\kb'
 $BackendBootstrap = Join-Path $BackendRoot 'bootstrap.ps1'
 $InstallerBootstrap = Join-Path $WorkRoot 'package\tools\bootstrap.ps1'
 $BuildClientCmd = Join-Path $WorkRoot 'build-client-current.cmd'
@@ -366,21 +364,9 @@ try {
     Assert-Path (Join-Path $BackendPackage 'node_modules\@line\bot-sdk') '@line/bot-sdk dependency'
     Assert-Path (Join-Path $BackendPackage 'dist\extensions\kb\index.js') 'Bundled KB plugin'
     Assert-Path (Join-Path $BackendPackage 'dist\extensions\kb\openclaw.plugin.json') 'Bundled KB plugin manifest'
-    Assert-Path (Join-Path $BackendPackage 'extensions\kb\requirements.txt') 'Bundled KB Python requirements'
-    $deployerScript = Join-Path $BackendPackage 'scripts\medclaw-deploy.mjs'
-    $deployerText = Get-Content -LiteralPath $deployerScript -Raw -Encoding UTF8
-    if ($deployerText -notmatch 'EAGER_PROVISION_PLUGINS\s*=\s*\[[^\]]*\"kb\"') {
-        throw 'Bundled deploy script does not eagerly provision the KB Python environment.'
-    }
-    if ([string]::IsNullOrWhiteSpace($KbEnvSource)) {
-        $KbEnvSource = Join-Path $env:USERPROFILE '.openclaw\envs\kb'
-    }
-    Assert-Path (Join-Path $KbEnvSource 'python.exe') 'Verified Windows KB Python environment'
-    & robocopy.exe $KbEnvSource $KbEnvDestination /MIR /R:2 /W:1 /XD '__pycache__' /XF '*.pyc' '*.pyo' '*.pdb'
-    if ($LASTEXITCODE -ge 8) {
-        throw "KB Python environment mirror failed with robocopy exit code $LASTEXITCODE"
-    }
-    Assert-Path (Join-Path $KbEnvDestination 'python.exe') 'Packaged KB Python environment'
+    # KB is a pure Node plugin. Its XLSX/PPTX support and vector store runtime are
+    # bundled as Node dependencies, so no requirements.txt or Python environment
+    # may be required or copied by the Windows packaging pipeline.
     Assert-Path (Join-Path $BackendPackage 'dist\extensions\kb\node_modules\@lancedb\lancedb-win32-x64-msvc\lancedb.win32-x64-msvc.node') 'Bundled KB LanceDB native runtime'
     Assert-CleanPiEmbeddedBundles -DistRoot (Join-Path $BackendPackage 'dist')
     # Keep the installer bootstrap synchronized with the backend source. A stale desktop copy once
