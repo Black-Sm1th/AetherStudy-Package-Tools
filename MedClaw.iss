@@ -1,5 +1,5 @@
 #define MyAppName "Aether study"
-#define MyAppVersion "2026.9.21.4"
+#define MyAppVersion "1.2.3-2"
 #define MyAppPublisher "AetherMED"
 #define MyAppExeName "AetherStudy.exe"
 #ifndef ClientPayloadDir

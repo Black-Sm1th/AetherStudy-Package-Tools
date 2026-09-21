@@ -2,7 +2,8 @@
 /output/
 /output-*/
 /outputs/
-/package/
+/package/client/
+/package/client-government/
 
 # Temporary client copies and build products
 /client-source-current/

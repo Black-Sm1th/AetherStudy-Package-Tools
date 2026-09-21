@@ -173,29 +173,58 @@ function Assert-Path {
     }
 }
 
-function Get-NextVersion {
-    $text = [IO.File]::ReadAllText($IssPath)
-    $match = [regex]::Match($text, '#define MyAppVersion "(?<version>\d+\.\d+\.\d+\.\d+)"')
+function Get-ClientVersion {
+    param([Parameter(Mandatory)] [string]$Root)
+
+    $versionFile = Join-Path $Root 'updatecontroller.cpp'
+    Assert-Path $versionFile 'Client version source'
+    $text = [IO.File]::ReadAllText($versionFile)
+    $match = [regex]::Match(
+        $text,
+        'clientVersion\s*\(\s*QStringLiteral\("v?(?<version>\d+(?:\.\d+){2,3})"\)'
+    )
     if (-not $match.Success) {
-        throw "MyAppVersion was not found in $IssPath"
+        throw "Client version was not found in $versionFile"
+    }
+    return $match.Groups['version'].Value
+}
+
+function Get-NextVersion {
+    param(
+        [Parameter(Mandatory)] [string]$ClientVersion,
+        [Parameter()] $PreviousState
+    )
+
+    $packageCount = 1
+    if ($null -ne $PreviousState -and [string]$PreviousState.clientVersion -eq $ClientVersion) {
+        $packageCount = [int]$PreviousState.packageCount
+        if ($packageCount -lt 1) {
+            $previousVersion = [string]$PreviousState.packageVersion
+            $versionPattern = '^{0}[.-](?<count>\d+)$' -f [regex]::Escape($ClientVersion)
+            $previousMatch = [regex]::Match($previousVersion, $versionPattern)
+            $packageCount = if ($previousMatch.Success) {
+                [int]$previousMatch.Groups['count'].Value
+            } else {
+                0
+            }
+        }
+        $packageCount++
     }
 
-    $datePrefix = Get-Date -Format 'yyyy.M.d'
-    $parts = $match.Groups['version'].Value.Split('.')
-    $currentPrefix = ($parts[0..2] -join '.')
-    $revision = if ($currentPrefix -eq $datePrefix) { [int]$parts[3] + 1 } else { 1 }
-    return "$datePrefix.$revision"
+    return "$ClientVersion-$packageCount"
 }
 
 function Set-InstallerVersion {
     param([Parameter(Mandatory)] [string]$Version)
     $text = [IO.File]::ReadAllText($IssPath)
-    $versionPattern = [regex]'#define MyAppVersion "\d+\.\d+\.\d+\.\d+"'
-    $updated = $versionPattern.Replace($text, "#define MyAppVersion `"$Version`"", 1)
-    if ($updated -eq $text) {
-        throw "Failed to update MyAppVersion in $IssPath"
+    $versionPattern = [regex]'#define MyAppVersion "\d+\.\d+\.\d+[.-]\d+"'
+    if (-not $versionPattern.IsMatch($text)) {
+        throw "Failed to find MyAppVersion in $IssPath"
     }
-    [IO.File]::WriteAllText($IssPath, $updated, [Text.UTF8Encoding]::new($false))
+    $updated = $versionPattern.Replace($text, "#define MyAppVersion `"$Version`"", 1)
+    if ($updated -ne $text) {
+        [IO.File]::WriteAllText($IssPath, $updated, [Text.UTF8Encoding]::new($false))
+    }
 }
 
 function Assert-CleanPiEmbeddedBundles {
@@ -242,6 +271,8 @@ try {
     Assert-Path $PwshArchive 'Cached portable PowerShell archive'
     Assert-Path $BackendBootstrap 'Backend installer bootstrap script'
     Assert-Path $DeployConfig 'Private deployment configuration'
+    $clientVersion = Get-ClientVersion -Root $ClientRoot
+    Write-Host "Client version: v$clientVersion" -ForegroundColor Green
 
     try {
         $deployConfigObject = Get-Content -LiteralPath $DeployConfig -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -460,7 +491,7 @@ try {
     $viewerFileCount = @(Get-ChildItem -LiteralPath $ViewerPayload -Recurse -File).Count
     Write-Host "Packaged client/viewer-web/dist ($viewerFileCount files)." -ForegroundColor Green
 
-    $version = Get-NextVersion
+    $version = Get-NextVersion -ClientVersion $clientVersion -PreviousState $previousState
     Set-InstallerVersion $version
     $compressionMode = if ($Fast) { 'lzma2/fast, non-solid' } else { 'lzma2/ultra64, solid' }
     Write-Host "`nInstaller version: $version" -ForegroundColor Green
@@ -485,6 +516,8 @@ try {
         edition = $Edition
         backendFingerprint = if ($BuildBackend) { $backendFingerprint } elseif ($null -ne $previousState) { $previousState.backendFingerprint } else { $null }
         clientFingerprint = if ($BuildClient) { $clientFingerprint } elseif ($null -ne $previousState) { $previousState.clientFingerprint } else { $null }
+        clientVersion = $clientVersion
+        packageCount = [int]([regex]::Match($version, '\d+$').Value)
         packageVersion = $version
         updatedAt = [DateTime]::UtcNow.ToString('o')
     }
