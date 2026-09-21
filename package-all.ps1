@@ -137,6 +137,8 @@ function Read-PackageState {
 function Write-PackageState {
     param($State)
 
+    $stateDirectory = Split-Path -Parent $PackageStatePath
+    New-Item -ItemType Directory -Path $stateDirectory -Force | Out-Null
     $json = $State | ConvertTo-Json -Depth 10
     $tempPath = "$PackageStatePath.tmp"
     [IO.File]::WriteAllText($tempPath, $json + [Environment]::NewLine, [Text.UTF8Encoding]::new($false))
@@ -262,13 +264,13 @@ $logPath = Join-Path $LogRoot ("package-{0}-{1}.log" -f $EditionKey, (Get-Date -
 Start-Transcript -Path $logPath -Force | Out-Null
 
 try {
+    New-Item -ItemType Directory -Path (Split-Path -Parent $PackageStatePath) -Force | Out-Null
     Assert-Path $IssPath 'Inno Setup project'
     Assert-Path $Iscc 'Inno Setup compiler'
     Assert-Path $NodeRunner 'Bundled Node runner'
     Assert-Path $NodeRunnerPnpm 'Bundled pnpm launcher'
     Assert-Path $NodeRunnerPnpmModule 'Bundled pnpm module'
     Assert-Path $KbToolsInstallScript 'KB tool installation script'
-    Assert-Path $PwshArchive 'Cached portable PowerShell archive'
     Assert-Path $BackendBootstrap 'Backend installer bootstrap script'
     Assert-Path $DeployConfig 'Private deployment configuration'
     $clientVersion = Get-ClientVersion -Root $ClientRoot
@@ -328,9 +330,15 @@ try {
         Invoke-Checked -FilePath 'pnpm.cmd' -Arguments @('build') -WorkingDirectory $BackendRoot
         $packArguments = @(
             (Join-Path $BackendRoot 'scripts\pack-tenant-prod.mjs'),
-            '--tenant', 'medbuddy',
-            '--pwsh-from', $PwshArchive
+            '--tenant', 'medbuddy'
         )
+        if (Test-Path -LiteralPath $PwshArchive) {
+            $packArguments += @('--pwsh-from', $PwshArchive)
+            Write-Host "Using cached portable PowerShell archive: $PwshArchive" -ForegroundColor Green
+        }
+        else {
+            Write-Host 'Portable PowerShell cache not found; pack-tenant-prod.mjs will download it.' -ForegroundColor Yellow
+        }
         if (Test-Path -LiteralPath $NssmCache) {
             $packArguments += @('--nssm-from', $NssmCache)
         }

@@ -17,7 +17,7 @@
 - `package/tools`：安装、升级、启动和卸载脚本。
 - `tools/Inno`：内置 Inno Setup 编译器。
 - `node-runner`：打包后端生产包使用的 Node.js。
-- `cache`：后端生产包使用的便携 PowerShell 缓存。
+- `cache`：本地缓存和版本计数状态。便携 PowerShell 压缩包存在时用于离线复用；缺失时，完整后端打包会自动下载，快速复用已有载荷不需要它。该目录保持在 Git 忽略列表中。
 - `output`：生成的安装包。
 - `logs`：打包日志。
 
