@@ -14,7 +14,6 @@
 # Local package caches and logs
 /cache/
 /logs/
-/node-runner/node_modules/
 
 # Common local/editor/build leftovers
 *.log
