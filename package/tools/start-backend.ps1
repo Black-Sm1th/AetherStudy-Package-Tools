@@ -70,19 +70,14 @@ function Wait-ServiceStatus {
 function Start-OrResumeGatewayService {
     param(
         [Parameter(Mandatory = $true)]
-        [System.ServiceProcess.ServiceController]$Service,
-        [switch]$AllowRestart
+        [System.ServiceProcess.ServiceController]$Service
     )
 
     $Service.Refresh()
     Write-Log "Recovering Gateway service '$($Service.ServiceName)' from state $($Service.Status)."
     switch ($Service.Status.ToString()) {
         "Running" {
-            if (-not $AllowRestart) { return }
-            Write-Log "Gateway service is running but port $Port is unavailable; restarting it."
-            Stop-Service -Name $Service.ServiceName -Force -ErrorAction Stop
-            Wait-ServiceStatus -Service $Service -Status Stopped -Seconds 30
-            Start-Service -Name $Service.ServiceName -ErrorAction Stop
+            Write-Log "Gateway service is already running; waiting for its existing listener."
         }
         "Paused" { Resume-Service -Name $Service.ServiceName -ErrorAction Stop }
         "PausePending" {
@@ -165,7 +160,7 @@ try {
         if ($null -eq $service) { $service = $services | Select-Object -First 1 }
         Write-Log "Found Gateway service '$($service.Name)' (status: $($service.Status))."
         try {
-            Start-OrResumeGatewayService -Service $service -AllowRestart
+            Start-OrResumeGatewayService -Service $service
         } catch {
             throw "Unable to recover Windows service '$($service.Name)' from state $($service.Status): $($_.Exception.Message)"
         }
