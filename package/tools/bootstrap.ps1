@@ -13,6 +13,7 @@ $backendRoot = Join-Path $InstallRoot "runtime\backend"
 $nodePath = Join-Path $backendRoot "runtime\node\node.exe"
 $deployScript = Join-Path $backendRoot "scripts\medclaw-deploy.mjs"
 $kbToolsInstallScript = Join-Path $InstallRoot "tools\install-kb-tools.mjs"
+$startBackendScript = Join-Path $InstallRoot "tools\start-backend.ps1"
 $distIndex = Join-Path $backendRoot "dist\index.js"
 $tenantTemplate = Join-Path $backendRoot "openclaw.tenant.json"
 $deployConfigPath = Join-Path $backendRoot "medclaw.deploy.json"
@@ -98,6 +99,75 @@ function Invoke-Checked {
     if ($proc.ExitCode -ne 0) {
         throw "$Description failed with exit code $($proc.ExitCode)"
     }
+}
+
+function Test-GatewayPort {
+    $client = New-Object System.Net.Sockets.TcpClient
+    try {
+        $async = $client.BeginConnect("127.0.0.1", $gatewayPort, $null, $null)
+        if (-not $async.AsyncWaitHandle.WaitOne(1000, $false)) {
+            return $false
+        }
+        $client.EndConnect($async)
+        return $client.Connected
+    } catch {
+        return $false
+    } finally {
+        $client.Close()
+    }
+}
+
+function Wait-GatewayPort {
+    param([int]$Seconds)
+    $deadline = [DateTime]::UtcNow.AddSeconds($Seconds)
+    do {
+        if (Test-GatewayPort) { return $true }
+        Start-Sleep -Milliseconds 500
+    } while ([DateTime]::UtcNow -lt $deadline)
+    return $false
+}
+
+function Grant-GatewayRecoveryPermission {
+    # The desktop application remains non-elevated. Grant interactive users only
+    # start and pause/continue rights so it can recover Stopped or Paused services.
+    $services = @(Get-Service -Name "AetherClawGateway*" -ErrorAction SilentlyContinue)
+    if ($services.Count -eq 0) {
+        throw "未找到 AetherClawGateway Windows 服务。"
+    }
+    $service = $services | Where-Object { $_.Name -eq "AetherClawGateway" } | Select-Object -First 1
+    if ($null -eq $service) { $service = $services | Select-Object -First 1 }
+
+    $sc = Join-Path $env:SystemRoot "System32\sc.exe"
+    $descriptorLines = @(& $sc sdshow $service.Name 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "无法读取 Gateway 服务权限：$($descriptorLines -join ' ')"
+    }
+    $descriptor = ($descriptorLines | ForEach-Object { $_.ToString().Trim() } |
+        Where-Object { $_ -match '^D:' } | Select-Object -First 1)
+    if ([string]::IsNullOrWhiteSpace($descriptor)) {
+        throw "Gateway 服务权限描述符为空。"
+    }
+    if ($descriptor -match '\(A;;(?=[A-Z]*RP)(?=[A-Z]*DT)[A-Z]+;;;IU\)') {
+        Write-Host "    Gateway 普通用户自动恢复权限已配置。"
+        return
+    }
+
+    $recoveryAce = "(A;;RPDT;;;IU)"
+    if ($descriptor.Contains("(A;;RP;;;IU)")) {
+        $updated = $descriptor.Replace("(A;;RP;;;IU)", $recoveryAce)
+    } else {
+        $saclIndex = $descriptor.IndexOf("S:", [StringComparison]::Ordinal)
+        $updated = if ($saclIndex -ge 0) {
+            $descriptor.Insert($saclIndex, $recoveryAce)
+        } else {
+            $descriptor + $recoveryAce
+        }
+    }
+    $setOutput = @(& $sc sdset $service.Name $updated 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        throw "无法设置 Gateway 自动恢复权限：$($setOutput -join ' ')"
+    }
+    Write-Host "    已允许普通桌面用户静默启动或恢复 Gateway 服务。"
 }
 
 function New-GatewayToken {
@@ -267,6 +337,9 @@ try {
         "--state-dir", $openClawRoot
     ) -Description "完整部署 Aether Study（零 build，包含 Miniconda 和 Gateway）"
 
+    Write-Step "配置 Gateway 自动恢复权限"
+    Grant-GatewayRecoveryPermission
+
     Write-Step "安装并启用 KB 工具"
     Invoke-Checked -FilePath $nodePath -ArgumentList @(
         $kbToolsInstallScript,
@@ -293,37 +366,41 @@ try {
     Set-JsonProperty -Object $clientConfig -Name "skillsStoragePath" -Value "~/AetherStudy/skills"
     Write-Utf8Json -Path $clientConfigPath -Value $clientConfig
 
-    Write-Step "检查 Gateway 监听端口"
-    $ready = $false
-    # Gateway installation is asynchronous on Windows. Allow up to 10 minutes
-    # so a delayed but healthy service does not make the installer fail early.
-    $gatewayWaitAttempts = 300
-    for ($attempt = 1; $attempt -le $gatewayWaitAttempts; $attempt++) {
-        $client = New-Object System.Net.Sockets.TcpClient
-        try {
-            $async = $client.BeginConnect("127.0.0.1", $gatewayPort, $null, $null)
-            if ($async.AsyncWaitHandle.WaitOne(1000, $false) -and $client.Connected) {
-                $client.EndConnect($async)
-                $ready = $true
-                break
-            }
-        } catch {
-            # Gateway may still be starting.
-        } finally {
-            $client.Close()
+    Write-Step "检查并确保 Gateway 服务已启动"
+    # The deployment normally starts the service. If it did not, use the same
+    # recovery entry point as the desktop client before declaring installation failed.
+    $ready = Wait-GatewayPort -Seconds 20
+    if (-not $ready) {
+        Write-Host "    Gateway 尚未监听，正在尝试自动恢复服务。" -ForegroundColor Yellow
+        if (-not (Test-Path -LiteralPath $startBackendScript)) {
+            throw "安装包缺少 Gateway 恢复脚本：$startBackendScript"
         }
-        Start-Sleep -Seconds 2
+        try {
+            Invoke-Checked -FilePath "powershell.exe" -ArgumentList @(
+                "-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-File", $startBackendScript,
+                "-InstallRoot", $InstallRoot,
+                "-StateDir", $openClawRoot,
+                "-Port", $gatewayPort.ToString()
+            ) -Description "自动启动或恢复 Gateway Windows 服务"
+        } catch {
+            Write-Host "    Gateway 自动恢复命令失败：$($_.Exception.Message)" -ForegroundColor Yellow
+        }
+        $ready = Wait-GatewayPort -Seconds 60
     }
     if (-not $ready) {
+        $gatewayServiceLogPath = Join-Path $openClawRoot "logs\gateway-service.log"
         $gatewayLogPath = Join-Path $openClawRoot "logs\gateway.log"
-        if (Test-Path -LiteralPath $gatewayLogPath) {
+        $manualStartLogPath = Join-Path $openClawRoot "logs\manual-start.log"
+        foreach ($candidateLog in @($gatewayServiceLogPath, $gatewayLogPath, $manualStartLogPath)) {
+            if (-not (Test-Path -LiteralPath $candidateLog)) { continue }
             Write-Host ""
-            Write-Host "Gateway 日志末尾：$gatewayLogPath" -ForegroundColor Yellow
-            Get-Content -LiteralPath $gatewayLogPath -Tail 80 -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "Gateway 日志末尾：$candidateLog" -ForegroundColor Yellow
+            Get-Content -LiteralPath $candidateLog -Tail 80 -ErrorAction SilentlyContinue | ForEach-Object {
                 Write-Host "    $_"
             }
         }
-        throw "Gateway did not start listening on 127.0.0.1:$gatewayPort within 5 minutes. Gateway log: $gatewayLogPath"
+        throw "Gateway 服务自动恢复后仍未启动（127.0.0.1:$gatewayPort）。请检查 $gatewayServiceLogPath 和 $manualStartLogPath；如果服务或运行文件缺失、损坏，请重新安装 Aether study。"
     }
 
     Write-Host ""
