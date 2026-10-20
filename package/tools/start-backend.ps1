@@ -10,12 +10,6 @@ $utf8 = New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding = $utf8
 $OutputEncoding = $utf8
 
-function Test-Administrator {
-    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
-    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-}
-
 if ([string]::IsNullOrWhiteSpace($StateDir)) {
     $StateDir = Join-Path $env:USERPROFILE ".openclaw"
 }
@@ -111,40 +105,6 @@ function Resolve-InstallRoot {
     return $candidates[0]
 }
 
-if (-not (Test-Administrator)) {
-    # New installations grant interactive users SERVICE_START and
-    # SERVICE_PAUSE_CONTINUE. Older installations fall back to one UAC prompt.
-    if (Test-GatewayPort) {
-        Write-Log "Gateway is already listening on 127.0.0.1:$Port."
-        exit 0
-    }
-
-    $service = Get-Service -Name "AetherClawGateway" -ErrorAction SilentlyContinue
-    if ($null -ne $service) {
-        try {
-            Write-Log "Trying to recover Gateway service without elevation."
-            Start-OrResumeGatewayService -Service $service
-            if (Wait-GatewayPort -Seconds 60) {
-                Write-Log "Gateway service recovered successfully without elevation."
-                exit 0
-            }
-            Write-Log "Gateway service did not open port $Port; retrying with administrator privileges."
-        } catch {
-            Write-Log "Non-elevated service recovery failed: $($_.Exception.Message)"
-        }
-    }
-
-    $argumentLine = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "{0}" -InstallRoot "{1}" -StateDir "{2}" -Port {3}' -f `
-        $PSCommandPath, $InstallRoot, $StateDir, $Port
-    try {
-        $elevated = Start-Process -FilePath "powershell.exe" -ArgumentList $argumentLine -Verb RunAs -Wait -PassThru
-        exit $elevated.ExitCode
-    } catch {
-        Write-Log "Administrator approval was not granted or elevated recovery failed: $($_.Exception.Message)"
-        exit 1
-    }
-}
-
 try {
     Write-Log "Manual Aether Gateway recovery requested."
     if (Test-GatewayPort) {
@@ -232,6 +192,6 @@ try {
 } catch {
     Write-Log "Gateway recovery failed: $($_.Exception.Message)"
     Write-Host "Log: $logPath" -ForegroundColor Yellow
-    Write-Host "Please reinstall Aether study if the service or runtime files are missing or damaged." -ForegroundColor Yellow
+    Write-Host "No administrator prompt was opened. Please reinstall Aether study if the service permission or runtime files are missing or damaged." -ForegroundColor Yellow
     exit 1
 }
